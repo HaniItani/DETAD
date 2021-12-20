@@ -1,4 +1,4 @@
-name: detad
+name: error
 channels:
   - defaults
 dependencies:

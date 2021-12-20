@@ -176,44 +176,25 @@ def plot_fp_analysis(fp_error_analysis, save_filename,
     print('[Done] Output analysis is saved in %s' % save_filename)
 
 
-def main(ground_truth_filename, subset, prediction_filename, output_folder, is_thumos14):
+def main(ground_truth_filename, prediction_filename, output_folder):
     os.makedirs(output_folder, exist_ok=True)
 
-    if not is_thumos14:
-        if subset == 'testing':
-            # ActivityNet testing
-            characteristic_names_to_bins = {'context-size': (range(-1,7), ['0','1','2','3','4','5','6']),
-                                            'context-distance': (range(-1,4), ['Inf','N','M','F']),
-                                            'agreement': (np.linspace(0,1.0,6), ['XW','W','M','H','XH']),
-                                            'coverage': (np.linspace(0,1.0,6), ['XS','S','M','L','XL']),
-                                            'length': (np.array([0,30,60,120,180,np.inf]), ['XS','S','M','L','XL']),
-                                            'num-instances': (np.array([-1,1,4,8,np.inf]), ['XS','S','M','L'])}
-        elif subset == 'validation':
-            # ActivityNet validation
-            characteristic_names_to_bins = {'coverage': (np.linspace(0,1.0,6), ['XS','S','M','L','XL']),
-                                            'length': (np.array([0,30,60,120,180,np.inf]), ['XS','S','M','L','XL']),
-                                            'num-instances': (np.array([-1,1,4,8,np.inf]), ['XS','S','M','L'])}
-        else: 
-            raise RuntimeError('%s is not a valid subset' % subset)
-        
-        tiou_thresholds = np.linspace(0.5, 0.95, 10)
-    else: 
-        # THUMOS14
-        characteristic_names_to_bins = {'coverage': (np.array([0,0.02,0.04,0.06,0.08,1]), ['XS','S','M','L','XL']),
-                                        'length': (np.array([0,3,6,12,18,np.inf]), ['XS','S','M','L','XL']),
-                                        'num-instances': (np.array([-1,1,40,80,np.inf]), ['XS','S','M','L'])}
-        tiou_thresholds = [0.5]
-
+    # characteristic_names_to_bins = {'context-size': (range(-1,7), ['0','1','2','3','4','5','6']),
+    #                                 'context-distance': (range(-1,4), ['Inf','N','M','F']),
+    #                                 'agreement': (np.linspace(0,1.0,6), ['XW','W','M','H','XH']),
+    #                                 'coverage': (np.linspace(0,1.0,6), ['XS','S','M','L','XL']),
+    #                                 'length': (np.array([0,30,60,120,180,np.inf]), ['XS','S','M','L','XL']),
+    #                                 'num-instances': (np.array([-1,1,4,8,np.inf]), ['XS','S','M','L'])}
+    # tiou_thresholds = np.linspace(0.5, 0.95, 10)
     fp_error_analysis = ActionDetectorDiagnosis(ground_truth_filename=ground_truth_filename,
                                                 prediction_filename=prediction_filename,
-                                                tiou_thresholds=tiou_thresholds,
+                                                tiou_thresholds=[0.5],
                                                 limit_factor=10,
                                                 min_tiou_thr=0.1,
-                                                subset=subset, 
                                                 verbose=True, 
-                                                load_extra_annotations=True,
-                                                characteristic_names_to_bins=characteristic_names_to_bins,
-                                                normalize_ap=True,
+                                                load_extra_annotations=False,
+                                                characteristic_names_to_bins={},
+                                                normalize_ap=False,
                                                 minimum_normalized_precision_threshold_for_detection=0.0
                                             )
 
@@ -230,14 +211,10 @@ if __name__ == '__main__':
 
     parser.add_argument('--ground_truth_filename', required=True, type=str,
                         help='The path to the JSON file containing the ground truth annotations')
-    parser.add_argument('--subset', default='validation', type=str,
-                        help='The dataset subset to use for the analysis')
     parser.add_argument('--prediction_filename', required=True, type=str,
                         help='The path to the JSON file containing the method\'s predictions')
     parser.add_argument('--output_folder', required=True, type=str,
                         help='The path to the folder in which the results will be saved')
-    parser.add_argument('--is_thumos14', default=False, action='store_true',
-                      help='Pass this argument if the dataset used is THUMOS14 and not ActivityNet')
     args = parser.parse_args()
 
-    main(args.ground_truth_filename, args.subset, args.prediction_filename, args.output_folder, args.is_thumos14)
+    main(args.ground_truth_filename, args.prediction_filename, args.output_folder)

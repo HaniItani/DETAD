@@ -5,13 +5,14 @@ import pandas as pd
 
 from utils import interpolated_prec_rec
 from utils import segment_iou
+from box_util import box3d_iou
 
 from joblib import Parallel, delayed
 
 class ActionDetectorDiagnosis(object):
 
-    GROUND_TRUTH_FIELDS = ['database', 'taxonomy', 'version']
-    PREDICTION_FIELDS = ['results', 'version', 'external_data']
+    GROUND_TRUTH_FIELDS = ['database']
+    PREDICTION_FIELDS = ['results']
 
     def __init__(self, ground_truth_filename=None, prediction_filename=None,
                  ground_truth_fields=GROUND_TRUTH_FIELDS,
@@ -19,7 +20,6 @@ class ActionDetectorDiagnosis(object):
                  tiou_thresholds=np.linspace(0.5, 0.95, 10), 
                  limit_factor=None,
                  min_tiou_thr=0.1,
-                 subset='testing', 
                  verbose=False, 
                  load_extra_annotations=False,
                  characteristic_names_to_bins={'context-size': (range(-1,7), ['0','1','2','3','4','5','6']),
@@ -35,7 +35,6 @@ class ActionDetectorDiagnosis(object):
             raise IOError('Please input a valid ground truth file.')
         if not prediction_filename:
             raise IOError('Please input a valid prediction file.')
-        self.subset = subset
         self.tiou_thresholds = tiou_thresholds
         self.verbose = verbose
         self.gt_fields = ground_truth_fields
@@ -67,7 +66,7 @@ class ActionDetectorDiagnosis(object):
         self.min_tiou_thr = min_tiou_thr
 
         if self.verbose:
-            print('[INIT] Loaded annotations from {} subset.'.format(subset))
+            print('[INIT] Loaded annotations')
             nr_gt = len(np.unique(self.ground_truth['gt-id']))
             print('\tNumber of ground truth instances: {}'.format(nr_gt))
             nr_pred = len(self.prediction)
@@ -100,15 +99,13 @@ class ActionDetectorDiagnosis(object):
         # Read ground truth data.
         gt_id_lst, current_gt_id = [], 0
         activity_index, cidx = {}, 0
-        video_lst, t_start_lst, t_end_lst, label_lst = [], [], [], []
+        video_lst, bbox_lst, label_lst = [], [], []
         
         if self.load_extra_annotations:
             print('[INIT] Loading extra annotations')
             extra_annotations = dict(zip(self.characteristic_names,[[] for _ in range(len(self.characteristic_names))]))
 
         for videoid, v in data['database'].items():
-            if self.subset != v['subset']:
-                continue
             for ann in v['annotations']:
                 if ann['label'] not in activity_index:
                     activity_index[ann['label']] = cidx
@@ -118,8 +115,7 @@ class ActionDetectorDiagnosis(object):
                     for seg_idx in range(self.evaluate_with_multi_segments):
                         gt_id_lst.append(current_gt_id)
                         video_lst.append(videoid)
-                        t_start_lst.append(float(ann['all-segments'][seg_idx][0]))
-                        t_end_lst.append(float(ann['all-segments'][seg_idx][1]))
+                        bbox_lst.append(np.array(ann['all-segments'][seg_idx]))
                         label_lst.append(activity_index[ann['label']])
                         
                         for characteristic_name in self.characteristic_names:
@@ -127,8 +123,7 @@ class ActionDetectorDiagnosis(object):
                 else:
                     gt_id_lst.append(current_gt_id)
                     video_lst.append(videoid)
-                    t_start_lst.append(float(ann['segment'][0]))
-                    t_end_lst.append(float(ann['segment'][1]))
+                    bbox_lst.append(np.array(ann['segment']))
                     label_lst.append(activity_index[ann['label']])
                     if self.load_extra_annotations:
                         for characteristic_name in self.characteristic_names:
@@ -137,8 +132,7 @@ class ActionDetectorDiagnosis(object):
 
         ground_truth = pd.DataFrame({'gt-id': gt_id_lst,
                                      'video-id': video_lst,
-                                     't-start': t_start_lst,
-                                     't-end': t_end_lst,
+                                     'bbox': bbox_lst,
                                      'label': label_lst,
                                      })        
 
@@ -153,9 +147,6 @@ class ActionDetectorDiagnosis(object):
             if 'coverage' in self.characteristic_names:
                 # remove instances with coverage > 1
                 ground_truth = ground_truth.loc[(np.array(extra_annotations['coverage'])) <= 1.0]
-
-        # remove instances of length <=0 
-        ground_truth = ground_truth.loc[ground_truth['t-start'].values < ground_truth['t-end'].values]
 
         return ground_truth, activity_index
 
@@ -180,14 +171,13 @@ class ActionDetectorDiagnosis(object):
             raise IOError('Please input a valid prediction file.')
 
         # Read predictions.
-        video_lst, t_start_lst, t_end_lst = [], [], []
+        video_lst, bbox_lst = [], []
         label_lst, score_lst = [], []
         for videoid, v in data['results'].items():
             for result in v:
                 label = self.activity_index[result['label']]
                 video_lst.append(videoid)
-                t_start_lst.append(float(result['segment'][0]))
-                t_end_lst.append(float(result['segment'][1]))
+                bbox_lst.append(np.array(result['segment']))
                 label_lst.append(label)
                 score_lst.append(result['score'])
 
@@ -195,8 +185,7 @@ class ActionDetectorDiagnosis(object):
 
         prediction = pd.DataFrame({'prediction-id': prediction_id_lst,
                                    'video-id': video_lst,
-                                   't-start': t_start_lst,
-                                   't-end': t_end_lst,
+                                   'bbox': bbox_lst,
                                    'label': label_lst,
                                    'score': score_lst})
 
@@ -424,8 +413,12 @@ def compute_average_precision_detection(ground_truth, prediction, tiou_threshold
             continue
 
         this_gt = ground_truth_videoid.reset_index()
-        tiou_arr = segment_iou(this_pred[['t-start', 't-end']].values,
-                               this_gt[['t-start', 't-end']].values)
+
+        tiou_arr = []
+        for gt in this_gt['bbox']:
+            tiou_arr.append(box3d_iou(this_pred['bbox'], gt))
+        tiou_arr = np.array(tiou_arr)
+
         # We would like to retrieve the predictions with highest tiou score.
         tiou_sorted_idx = tiou_arr.argsort()[::-1]
         for tidx, tiou_thr in enumerate(tiou_thresholds):
@@ -511,9 +504,14 @@ def analyze_fp_error_types(prediction,
                 continue
 
             current_video_id = this_pred['video-id']
-
-        tiou_arr = segment_iou(this_pred[['t-start', 't-end']].values,
-                               this_gt[['t-start', 't-end']].values)
+        
+        tiou_arr = []
+        for gt in this_gt['bbox']:
+            tiou_arr.append(box3d_iou(this_pred['bbox'], gt))
+        tiou_arr = np.array(tiou_arr)
+        
+        # tiou_arr = segment_iou(this_pred[['t-start', 't-end']].values,
+        #                        this_gt[['t-start', 't-end']].values)
         # We would like to retrieve the predictions with highest tiou score.
         gt_with_max_tiou_label = this_gt.loc[tiou_arr.argmax()]['label']
         top_tiou = tiou_arr.max()
